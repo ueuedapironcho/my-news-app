@@ -1,0 +1,110 @@
+from datetime import datetime
+import urllib.parse
+import xml.etree.ElementTree as ET
+import requests
+import streamlit as st
+
+# アプリのタイトルとデザイン設定
+st.set_page_config(page_title="ニュース一括検索", page_icon="🔍", layout="centered")
+st.title("🔍 ニュース一括検索システム")
+st.write("入力されたキーワードに関する最新ニュースを網羅します。")
+
+# 🛠️ 画面上に表示される入力ボックス
+検索ワード = st.text_input("検索したい企業名やキーワードを入力してください：", value="パーク24")
+
+# 検索ボタンが押されたら実行
+if st.button("最新ニュースを検索する"):
+    if not 検索ワード.strip():
+        st.error("❌ 検索ワードが空欄です。文字を入力してください。")
+    else:
+        # 🚗 と 🚲 の区別を無くし、幅広く検索するキーワードに統合
+        full_query_base = f'"{検索ワード}" (システム OR カメラ OR 実証実験 OR キャッシュレス OR フラップレス OR EV OR 決済 OR 認証 OR 駐輪場 OR サイクル)'
+
+        sources = {
+            "Googleニュース全体": "",
+            "PR TIMES公式発表": " site:prtimes.jp",
+            "Yahoo!ニュース": " site:news.yahoo.co.jp",
+        }
+
+        headers = {
+            "User-Agent": "Mozilla/5.0 (iPhone; CPU iPhone OS 16_6 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/16.6 Mobile/15E148 Safari/604.1"
+        }
+
+        st.info(f"🚀 「{検索ワード}」の最新ニュースを収集中...")
+
+        # 検索処理（カテゴリ分けを無くしてシンプルに）
+        for source_name, site_command in sources.items():
+            full_query = full_query_base + site_command
+            encoded_query = urllib.parse.quote(full_query)
+            url = f"https://news.google.com/rss/search?q={encoded_query}&hl=ja&gl=JP&ceid=JP:ja"
+
+            try:
+                response = requests.get(url, headers=headers)
+                response.raise_for_status()
+
+                root = ET.fromstring(response.content)
+                items = root.findall(".//item")
+
+                if len(items) == 0:
+                    st.warning(f"⚠️ {source_name} に該当するニュースは見つかりませんでした。")
+                    continue
+
+                # データの成形
+                parsed_items = []
+                for item in items:
+                    title = item.find("title").text
+                    link = item.find("link").text
+                    pub_date_str = item.find("pubDate").text
+                    source_el = item.find("source")
+                    site_name = (
+                        source_el.text if source_el is not None else "不明"
+                    )
+
+                    try:
+                        pub_date = datetime.strptime(
+                            pub_date_str[:-4], "%a, %d %b %Y %H:%M:%S"
+                        )
+                    except:
+                        pub_date = datetime.min
+
+                    parsed_items.append(
+                        {
+                            "title": title,
+                            "link": link,
+                            "pub_date_str": pub_date_str,
+                            "pub_date": pub_date,
+                            "site_name": site_name,
+                        }
+                    )
+
+                # 日付が新しい順にソート
+                sorted_items = sorted(
+                    parsed_items, key=lambda x: x["pub_date"], reverse=True
+                )
+                unique_sites = set([item["site_name"] for item in sorted_items])
+
+                display_count = min(30, len(sorted_items))
+                displayed_items = sorted_items[:display_count]
+
+                # 各ニュースソースごとにアコーディオンで表示
+                with st.expander(f"🔷 {source_name} (最新 {display_count} 件)"):
+                    for target_site in unique_sites:
+                        site_articles = [
+                            a
+                            for a in displayed_items
+                            if a["site_name"] == target_site
+                        ]
+                        if not site_articles:
+                            continue
+
+                        st.markdown(f"**🌐 発信元: {target_site}**")
+                        for article in site_articles:
+                            st.markdown(
+                                f"- [{article['title']}]({article['link']}) <br> <small style='color:gray;'>{article['pub_date_str']}</small>",
+                                unsafe_allow_html=True,
+                            )
+                        st.write("---")
+
+            except Exception as e:
+                st.error(f"❌ {source_name} の取得中にエラー: {e}")
+        st.success("✨ 検索が完了しました！")
